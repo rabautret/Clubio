@@ -356,6 +356,7 @@ main{padding-block:22px 120px}
 .clean .login .card,.clean .login .list{border:1px solid var(--line)}
 .clean .evi-s+div>div:first-child{font-style:normal!important;text-transform:none!important;font-weight:700!important}
 .clean .evi-s{background:color-mix(in srgb,var(--tc) 14%,transparent);color:var(--tc)}
+.login .crest svg{width:34px;height:34px}
 .theme-pick{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .theme-opt{border:1.5px solid var(--line);border-radius:16px;background:var(--surface);padding:10px;display:flex;flex-direction:column;gap:8px;text-align:left;font-weight:700}
 .theme-opt[aria-pressed="true"]{border:2px solid var(--accent);background:var(--accent-soft)}
@@ -375,11 +376,21 @@ main{padding-block:22px 120px}
 <div id="modal"></div>
 <div id="toast" hidden class="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
+/* =====================================================================
+   CONFIGURATION SUPABASE — à remplir (Supabase > Project Settings > API)
+   ===================================================================== */
+const SUPABASE_URL='https://tgsridrqrygxxzoynupc.supabase.co';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRnc3JpZHJxcnlneHh6b3ludXBjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MDg2MTYsImV4cCI6MjEwNzk4NDYxNn0.68OuJLIqHR90i64DNctXxmtge1lbjN81iyGA5UPaXN0';
+/* ===================================================================== */
+const CONFIGURED=!/VOTRE/.test(SUPABASE_URL+SUPABASE_ANON_KEY);
+const sb=CONFIGURED&&window.supabase?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+
 /* ---------- Stockage ---------- */
 const KEY='vestiaire_club_v2', SKEY='vestiaire_club_session';
 const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
-const uid=()=>Math.random().toString(36).slice(2,10);
+const uid=()=>crypto.randomUUID();
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const low=s=>String(s||'').trim().toLowerCase();
 
@@ -429,7 +440,8 @@ function seed(){
   return {club:{name:'Olympique des Tilleuls',sport:'football',short:'OT'},titles:[...DEFAULT_TITLES],users:u,champs,teams,players,events,validations:{}};
 }
 
-let S=migrate(store.get(KEY)||seed());
+const emptyState=()=>({club:{name:'Espace club',short:'',sport:'football',sportName:''},titles:[...DEFAULT_TITLES],users:[],champs:[],teams:[],players:[],events:[],validations:{}});
+let S=emptyState();
 function migrate(s){
   s.players.forEach(p=>{if(!p.parentEmails){p.parentEmails=p.parentEmail?[p.parentEmail]:[];delete p.parentEmail}if(!p.phones){p.phones={};if(p.phone&&p.parentEmails[0])p.phones[low(p.parentEmails[0])]=p.phone}delete p.phone});
   Object.keys(s.validations||{}).forEach(k=>{const v=s.validations[k];if(Array.isArray(v)){const o={};v.forEach(id=>o[id]='ok');s.validations[k]=o}});
@@ -439,9 +451,116 @@ function migrate(s){
   if(!ks.includes(s.club.sport)){const k=keys[String(s.club.sport||'').trim().toLowerCase()];if(k)s.club.sport=k;else{s.club.sportName=s.club.sport||'';s.club.sport='autre'}}
   return s;
 }
-let me=store.get(SKEY);
-const ui={tab:'cal',clubSec:'teams',calMode:'up',teamFilter:'all',sheet:null,loginErr:''};
-const save=()=>store.set(KEY,S);
+let me=null;
+const ui={tab:'cal',clubSec:'teams',calMode:'up',teamFilter:'all',sheet:null,loginErr:'',loginStep:'email',loginEmail:'',busy:false,booting:true};
+
+/* ---------- Base de données (Supabase) ---------- */
+const PK={club:['id'],members:['id'],championships:['id'],teams:['id'],players:['id'],player_parents:['player_id','email'],events:['id'],responses:['event_id','player_id']};
+const ORDER=['club','members','championships','teams','players','player_parents','events','responses'];
+let base=null, chain=Promise.resolve(), reloadTimer=null, channel=null;
+
+function fromDb(r){
+  const st=emptyState();
+  const c=r.club[0];
+  if(c){st.club={name:c.name,short:c.short,sport:c.sport,sportName:c.sport_name||''};st.titles=c.titles||[]}
+  st.users=r.members.map(m=>({id:m.id,email:m.email,name:m.name,role:m.role}));
+  st.champs=r.championships.map(x=>({id:x.id,name:x.name,season:x.season||''}));
+  st.teams=r.teams.map(t=>({id:t.id,name:t.name,category:t.category||'',coachIds:t.coach_ids||[],champIds:t.champ_ids||[]}));
+  st.players=r.players.map(p=>({id:p.id,first:p.first_name,last:p.last_name,birth:p.birth||'',teamId:p.team_id,parentEmails:[],phones:{}}));
+  const byId=Object.fromEntries(st.players.map(p=>[p.id,p]));
+  [...r.player_parents].sort((a,b)=>a.position-b.position).forEach(pp=>{
+    const p=byId[pp.player_id];if(!p)return;
+    p.parentEmails.push(pp.email);p.phones[pp.email]=pp.phone||'';
+    if(pp.state!=='pending'){(st.validations[pp.email]=st.validations[pp.email]||{})[p.id]=pp.state}
+  });
+  st.events=r.events.map(e=>({id:e.id,teamId:e.team_id,createdBy:e.created_by,title:e.title,subtitle:e.subtitle||'',opponent:e.opponent||'',start:e.start_at,
+    askPresence:e.ask_presence,convoked:e.convoked||[],seriesId:e.series_id,repeat:e.repeat,responses:{},
+    live:{status:e.live_status,us:e.score_us,them:e.score_them,startedAt:e.live_started_at}}));
+  const evById=Object.fromEntries(st.events.map(e=>[e.id,e]));
+  r.responses.forEach(x=>{if(evById[x.event_id])evById[x.event_id].responses[x.player_id]=x.status});
+  return st;
+}
+function toRows(){
+  return {
+    club:[{id:1,name:S.club.name,short:S.club.short,sport:S.club.sport,sport_name:S.club.sportName||null,titles:S.titles}],
+    members:S.users.map(u=>({id:u.id,email:low(u.email),name:u.name,role:u.role})),
+    championships:S.champs.map(c=>({id:c.id,name:c.name,season:c.season||null})),
+    teams:S.teams.map(t=>({id:t.id,name:t.name,category:t.category||null,coach_ids:t.coachIds,champ_ids:t.champIds})),
+    players:S.players.map(p=>({id:p.id,first_name:p.first,last_name:p.last,birth:p.birth||null,team_id:p.teamId||null})),
+    player_parents:S.players.flatMap(p=>p.parentEmails.map((m,i)=>({player_id:p.id,email:low(m),phone:(p.phones||{})[low(m)]||'',state:(S.validations[low(m)]||{})[p.id]||'pending',position:i}))),
+    events:S.events.map(e=>({id:e.id,team_id:e.teamId||null,created_by:e.createdBy||null,title:e.title,subtitle:e.subtitle||null,opponent:e.opponent||null,
+      start_at:new Date(e.start).toISOString(),ask_presence:!!e.askPresence,convoked:e.convoked,series_id:e.seriesId||null,repeat:e.repeat||null,
+      live_status:e.live.status,score_us:e.live.us,score_them:e.live.them,live_started_at:e.live.startedAt?new Date(e.live.startedAt).toISOString():null})),
+    responses:S.events.flatMap(e=>Object.entries(e.responses).filter(([,v])=>v).map(([pid,v])=>({event_id:e.id,player_id:pid,status:v})))
+  };
+}
+async function loadAll(){
+  const res=await Promise.all(ORDER.map(t=>sb.from(t).select('*')));
+  const err=res.find(x=>x.error);if(err)throw err.error;
+  const r={};ORDER.forEach((t,i)=>r[t]=res[i].data||[]);
+  S=fromDb(r);base=toRows();
+}
+async function pushDiff(){
+  if(!me||!base)return;
+  const cur=toRows();
+  if(isParent()){base=cur;return}            // les parents écrivent via des fonctions dédiées
+  for(const t of ORDER){
+    const key=r=>PK[t].map(c=>r[c]).join('|');
+    const old=new Map(base[t].map(r=>[key(r),JSON.stringify(r)]));
+    let up=cur[t].filter(r=>old.get(key(r))!==JSON.stringify(r));
+    if(!up.length)continue;
+    if(t==='player_parents')up=up.map(({state,...r})=>r); // la confirmation appartient au parent
+    const {error}=await sb.from(t).upsert(up,{onConflict:PK[t].join(',')});
+    if(error)throw error;
+  }
+  for(const t of [...ORDER].reverse()){
+    const key=r=>PK[t].map(c=>r[c]).join('|');
+    const now=new Set(cur[t].map(key));
+    const gone=base[t].filter(r=>!now.has(key(r)));
+    if(!gone.length)continue;
+    if(PK[t].length===1){const {error}=await sb.from(t).delete().in(PK[t][0],gone.map(r=>r[PK[t][0]]));if(error)throw error}
+    else for(const r of gone){const m={};PK[t].forEach(c=>m[c]=r[c]);const {error}=await sb.from(t).delete().match(m);if(error)throw error}
+  }
+  base=cur;
+}
+function dbError(e){
+  console.error(e);
+  const msg=/row-level security|permission/i.test(e.message||'')?"Vous n'avez pas les droits pour cette modification.":(e.message||'Erreur réseau');
+  toast('⚠️ '+msg+' Données rechargées.');
+  return loadAll().then(render).catch(()=>{});
+}
+const save=()=>{chain=chain.then(pushDiff).catch(dbError)};
+function scheduleReload(){
+  clearTimeout(reloadTimer);
+  reloadTimer=setTimeout(()=>{if(document.getElementById('modal').innerHTML){scheduleReload();return}chain=chain.then(loadAll).then(()=>{identify();render()}).catch(e=>console.error(e))},350);
+}
+function parentCall(fn,args){
+  chain=chain.then(async()=>{const {error}=await sb.rpc(fn,args);if(error)throw error;await loadAll();identify();render()}).catch(dbError);
+}
+function identify(){
+  if(!me)return;
+  const email=low(me.email);
+  const u=S.users.find(x=>low(x.email)===email);
+  if(u)me={role:u.role,id:u.id,email,name:u.name};
+  else if(S.players.some(p=>hasParent(p,email)))me={role:'parent',email,name:'Parent'};
+  else me={role:'unknown',email,name:''};
+}
+async function enter(email){
+  me={role:'unknown',email:low(email),name:''};ui.booting=true;render();
+  try{await loadAll()}catch(e){ui.booting=false;ui.loginErr='Impossible de charger les données : '+e.message;me=null;render();return}
+  identify();ui.booting=false;ui.tab='cal';
+  if(!channel){channel=sb.channel('club-live').on('postgres_changes',{event:'*',schema:'public'},scheduleReload).subscribe()}
+  render();
+}
+async function boot(){
+  if(!sb){ui.booting=false;render();return}
+  sb.auth.onAuthStateChange((evt,session)=>{
+    if(evt==='SIGNED_IN'&&session&&(!me||low(me.email)!==low(session.user.email)))enter(session.user.email);
+    if(evt==='SIGNED_OUT'){me=null;S=emptyState();base=null;render()}
+  });
+  const {data:{session}}=await sb.auth.getSession();
+  if(session)await enter(session.user.email);else{ui.booting=false;render()}
+}
 const TKEY='vestiaire_theme';
 let theme=(()=>{try{return localStorage.getItem(TKEY)||'clean'}catch(e){return 'clean'}})();
 const applyTheme=()=>document.documentElement.classList.toggle('clean',theme==='clean');
@@ -513,7 +632,10 @@ const I={
 /* ---------- Rendu principal ---------- */
 function render(){
   const app=document.getElementById('app');
+  if(!sb){app.innerHTML=setupView();return}
+  if(ui.booting){app.innerHTML=`<div class="login"><div class="wrap"><div class="card" style="text-align:center">Chargement du club…</div></div></div>`;return}
   if(!me){app.innerHTML=loginView();renderSheet();return}
+  if(me.role==='unknown'){app.innerHTML=unknownView();return}
   if(isParent()&&pendingKids().length){app.innerHTML=validateView();renderSheet();return}
   const tabs=isAdmin()?[['cal','Calendrier',I.cal],['live','Live',I.live],['club','Club',I.club],['me','Compte',I.me]]
            :isCoach()?[['cal','Calendrier',I.cal],['live','Live',I.live],['team','Équipe',I.team],['me','Compte',I.me]]
@@ -540,29 +662,57 @@ function render(){
 }
 
 /* ---------- Connexion ---------- */
+function setupView(){
+  return `<div class="login"><div class="wrap"><div class="card section">
+    <h2 style="font-size:24px">Configuration requise</h2>
+    <div>Ouvrez <code>index.html</code> et renseignez <code>SUPABASE_URL</code> et <code>SUPABASE_ANON_KEY</code> en haut du script (Supabase › Project Settings › API).</div>
+    ${window.supabase?'':'<div class="err">La bibliothèque Supabase ne s\'est pas chargée. Vérifiez la connexion internet.</div>'}
+  </div></div></div>`;
+}
+function unknownView(){
+  return `<div class="login"><div class="wrap"><div class="card section">
+    <h2 style="font-size:24px">Adresse non reconnue</h2>
+    <div class="muted"><strong>${esc(me.email)}</strong> n'est rattachée à aucun membre ni à aucun enfant du club. Demandez au club d'ajouter cette adresse sur la fiche de votre enfant.</div>
+    <button class="btn block" data-a="logout">Utiliser une autre adresse</button>
+  </div></div></div>`;
+}
 function loginView(){
-  const demo=[['admin@club.fr','Administrateur du club','Sophie Martin'],['coach.u11@club.fr','Coach des U11','Karim Benali'],['famille.durand@mail.fr','Parent de Léo (U11) et Emma (U13)','Famille Durand'],['papa.durand@mail.fr','2e parent de Léo (U11)','Papa Durand']];
+  const sent=ui.loginStep==='sent';
   return `<div class="login"><div class="wrap">
-    <div class="hero"><div class="stack" style="gap:14px"><div class="crest">${esc(S.club.short||'OT')}</div>
-    <div><div class="label">Espace club</div><h1>${esc(S.club.name)}</h1></div></div>${sportIcon()}</div>
-    <form id="loginForm" class="card section">
-      <label class="field"><span>Adresse e-mail</span><input class="input" id="loginEmail" name="email" type="email" required autocomplete="email" placeholder="prenom.nom@mail.fr"></label>
+    <div class="hero"><div class="stack" style="gap:14px"><div class="crest">${sportIcon()}</div>
+    <div><div class="label">Espace club</div><h1>Connexion</h1></div></div>${sportIcon()}</div>
+    ${!sent?`<form id="loginForm" class="card section">
+      <label class="field"><span>Adresse e-mail</span><input class="input" id="loginEmail" name="email" type="email" required autocomplete="email" placeholder="prenom.nom@mail.fr" value="${esc(ui.loginEmail)}"></label>
       ${ui.loginErr?`<div class="err">${esc(ui.loginErr)}</div>`:''}
-      <button class="btn primary block" type="submit">Se connecter</button>
-      <div class="muted" style="font-size:13px">Les parents se connectent avec l'adresse e-mail renseignée par le club.</div>
-    </form>
-    <div class="section"><div class="label demo-lbl">Comptes de démonstration</div>
-      <div class="list demo">${demo.map(([e,r,n])=>`<button data-a="demo" data-email="${e}">${av(n)}<span class="grow" style="min-width:0"><span class="name" style="display:block;font-weight:600">${esc(n)}</span><span class="meta" style="font-size:13px;color:var(--muted)">${esc(r)} · ${esc(e)}</span></span></button>`).join('')}</div>
-    </div>
+      <button class="btn primary block" type="submit" ${ui.busy?'disabled':''}>${ui.busy?'Envoi…':'Recevoir mon lien de connexion'}</button>
+      <div class="muted" style="font-size:13px">Pas de mot de passe : vous recevez un lien par e-mail. Les parents utilisent l'adresse renseignée par le club.</div>
+    </form>`
+    :`<form id="otpForm" class="card section">
+      <div><strong>Lien envoyé à ${esc(ui.loginEmail)}</strong><div class="muted" style="font-size:14px">Ouvrez l'e-mail et cliquez sur le lien, sur cet appareil. Pensez à regarder dans les spams.</div></div>
+      <label class="field"><span>Ou saisissez le code reçu (si l'e-mail en contient un)</span><input class="input num" id="otpCode" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" maxlength="10"></label>
+      ${ui.loginErr?`<div class="err">${esc(ui.loginErr)}</div>`:''}
+      <button class="btn primary block" type="submit" ${ui.busy?'disabled':''}>Valider le code</button>
+      <button class="btn block" type="button" data-a="login-back">Changer d'adresse</button>
+    </form>`}
   </div></div>`;
 }
-function login(email){
-  email=low(email);
-  const u=S.users.find(x=>low(x.email)===email);
-  if(u){me={role:u.role,id:u.id,email:u.email,name:u.name}}
-  else if(S.players.some(p=>hasParent(p,email))){me={role:'parent',email,name:'Parent'}}
-  else{ui.loginErr="Cette adresse n'est pas connue du club. Vérifiez l'orthographe ou demandez au club de l'ajouter à la fiche de votre enfant.";render();return}
-  ui.loginErr='';ui.tab='cal';store.set(SKEY,me);render();
+async function login(email){
+  email=low(email);ui.loginEmail=email;ui.loginErr='';ui.busy=true;render();
+  try{
+    const {data:known,error:e1}=await sb.rpc('is_known_email',{p_email:email});
+    if(e1)throw e1;
+    if(!known){ui.loginErr="Cette adresse n'est pas connue du club. Vérifiez l'orthographe ou demandez au club de l'ajouter à la fiche de votre enfant.";return}
+    const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.href.split('#')[0].split('?')[0]}});
+    if(error)throw error;
+    ui.loginStep='sent';
+  }catch(e){ui.loginErr=/rate|seconds/i.test(e.message||'')?"Trop de demandes. Patientez une minute avant de redemander un lien.":(e.message||'Erreur réseau')}
+  finally{ui.busy=false;render()}
+}
+async function verifyCode(code){
+  ui.busy=true;ui.loginErr='';render();
+  const {error}=await sb.auth.verifyOtp({email:ui.loginEmail,token:code.trim(),type:'email'});
+  ui.busy=false;
+  if(error){ui.loginErr='Code invalide ou expiré.';render()}
 }
 
 /* ---------- Validation parent ---------- */
@@ -817,8 +967,7 @@ function accountView(){
         <button class="theme-opt" data-a="theme" data-v="clean" aria-pressed="${theme==='clean'}"><span class="sw clean-sw"><i style="background:#2B59FF"></i><i style="background:color-mix(in srgb,#FF6A3D 22%,transparent)"></i><i style="background:color-mix(in srgb,#12B5A0 22%,transparent)"></i></span>Épuré<small>Clair et aéré</small></button>
         <button class="theme-opt" data-a="theme" data-v="punchy" aria-pressed="${theme==='punchy'}"><span class="sw punchy-sw"><i style="background:#fff"></i><i style="background:#FFD23F"></i><i style="background:#FF6A3D"></i></span>Punchy<small>Dégradés et couleurs vives</small></button>
       </div></div>
-    <div class="card section"><div class="label">Démonstration</div><div class="muted" style="font-size:14px">Les données sont enregistrées dans ce navigateur. Déconnectez-vous pour tester un autre rôle (admin, coach, parent).</div>
-    <button class="btn danger block" data-a="reset" data-confirm>Réinitialiser les données d'exemple</button></div></div>`;
+  </div>`;
 }
 
 /* ---------- Modale générique ---------- */
@@ -940,9 +1089,8 @@ function unvalidate(p,m){const k=low(m);if(S.validations[k])delete S.validations
 /* ---------- Actions ---------- */
 function act(a,d,el){
   switch(a){
-    case 'demo':login(d.email);break;
-    case 'logout':me=null;store.del(SKEY);ui.sheet=null;render();break;
-    case 'reset':S=seed();save();me=null;store.del(SKEY);ui.sheet=null;render();toast('Données réinitialisées');break;
+    case 'logout':ui.sheet=null;ui.loginStep='email';me=null;sb.auth.signOut();render();break;
+    case 'login-back':ui.loginStep='email';ui.loginErr='';render();break;
     case 'theme':theme=d.v;try{localStorage.setItem(TKEY,theme)}catch(e){}applyTheme();render();break;
     case 'tab':ui.tab=d.tab;window.scrollTo(0,0);render();break;
     case 'cal-mode':ui.calMode=d.v;render();break;
@@ -950,7 +1098,8 @@ function act(a,d,el){
     case 'open-ev':ui.sheet=d.id;renderSheet();break;
     case 'close-sheet':ui.sheet=null;renderSheet();break;
     case 'close-modal':closeModal();break;
-    case 'respond':{const e=ev(d.ev);e.responses[d.pl]=e.responses[d.pl]===d.v?undefined:d.v;if(!e.responses[d.pl])delete e.responses[d.pl];save();render();break}
+    case 'respond':{const e=ev(d.ev);e.responses[d.pl]=e.responses[d.pl]===d.v?undefined:d.v;if(!e.responses[d.pl])delete e.responses[d.pl];
+      if(isParent())parentCall('parent_respond',{p_event:e.id,p_player:d.pl,p_status:e.responses[d.pl]||null});else save();render();break}
     case 'ev-new':eventForm(null);break;
     case 'ev-edit':eventForm(ev(d.id));break;
     case 'ev-del-series':{const e=ev(d.id),t0=new Date(e.start);const n=S.events.filter(x=>x.seriesId===e.seriesId&&new Date(x.start)>=t0).length;
@@ -1003,7 +1152,7 @@ function act(a,d,el){
           const fd=new FormData(f),name=fd.get('name').trim(),mail=low(fd.get('mail'));
           if(!name)return 'Indiquez un nom.';if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail))return "L'e-mail n'est pas valide.";
           if(S.users.some(x=>low(x.email)===mail&&x!==u))return 'Cet e-mail est déjà utilisé par un autre membre.';
-          if(u){u.name=name;u.email=mail;if(u.id!==me.id)u.role=fd.get('role');if(u.id===me.id){me.name=name;me.email=mail;store.set(SKEY,me)}}
+          if(u){u.name=name;u.email=mail;if(u.id!==me.id)u.role=fd.get('role');if(u.id===me.id){me.name=name}}
           else S.users.push({id:uid(),name,email:mail,role:fd.get('role')});toast(u?'Membre mis à jour':'Membre ajouté')});break}
     case 'user-del':S.users=S.users.filter(u=>u.id!==d.id);S.teams.forEach(t=>t.coachIds=t.coachIds.filter(x=>x!==d.id));save();render();toast('Membre supprimé');break;
     case 'child-edit':{const k=player(d.id);
@@ -1011,9 +1160,9 @@ function act(a,d,el){
         <label class="field"><span>Date de naissance</span><input class="input" id="ckBirth" type="date" name="birth" value="${esc(k.birth)}"></label>
         <label class="field"><span>Votre téléphone</span><input class="input" id="ckPhone" type="tel" name="phone" value="${esc(phoneOf(k,me.email))}" placeholder="06 00 00 00 00"></label>
         <div class="muted" style="font-size:13px">Votre téléphone n'est visible que par le club et les coachs. L'autre parent renseigne le sien.</div>`,'Enregistrer',f=>{
-          const fd=new FormData(f);k.birth=fd.get('birth');setPhone(k,fd.get('phone'));toast('Informations mises à jour')});break}
+          const fd=new FormData(f);k.birth=fd.get('birth');setPhone(k,fd.get('phone'));parentCall('parent_update',{p_player:k.id,p_birth:k.birth||null,p_phone:fd.get('phone')||''});toast('Informations mises à jour')});break}
     case 'kid-ok':{const p=player(d.id);const b=document.getElementById('v-birth-'+p.id),ph=document.getElementById('v-phone-'+p.id);
-      if(b&&b.value)p.birth=b.value;if(ph)setPhone(p,ph.value);setLink(p.id,'ok');save();ui.tab='cal';render();toast(`${p.first} est rattaché(e) à votre compte`);break}
+      if(b&&b.value)p.birth=b.value;if(ph)setPhone(p,ph.value);setLink(p.id,'ok');parentCall('parent_link',{p_player:p.id,p_state:'ok',p_birth:p.birth||null,p_phone:ph?ph.value:null});ui.tab='cal';render();toast(`${p.first} est rattaché(e) à votre compte`);break}
     case 'pick-title':{const inp=document.getElementById('evTitle');inp.value=d.v;document.querySelectorAll('.chip.pick').forEach(c=>c.setAttribute('aria-pressed',c===el));inp.focus();break}
     case 'title-new':case 'title-edit':{const i=a==='title-edit'?Number(d.i):-1;
       openModal(i<0?'Nouveau titre':'Renommer le titre',`<label class="field"><span>Titre</span><input class="input" id="ttName" name="name" required value="${esc(i<0?'':S.titles[i])}" placeholder="Plateau U9"></label>`,i<0?'Ajouter':'Enregistrer',f=>{
@@ -1022,7 +1171,7 @@ function act(a,d,el){
         if(i<0)S.titles.push(v);else S.titles[i]=v;toast(i<0?'Titre ajouté':'Titre renommé')});break}
     case 'title-del':S.titles.splice(Number(d.i),1);save();render();toast('Titre supprimé');break;
     case 'title-move':{const i=Number(d.i),j=i+Number(d.d);if(j<0||j>=S.titles.length)break;[S.titles[i],S.titles[j]]=[S.titles[j],S.titles[i]];save();render();break}
-    case 'kid-no':setLink(d.id,'no');save();render();toast('Le club sera informé');break;
+    case 'kid-no':setLink(d.id,'no');parentCall('parent_link',{p_player:d.id,p_state:'no'});render();toast('Le club sera informé');break;
   }
 }
 
@@ -1053,12 +1202,13 @@ document.addEventListener('input',e=>{if(['evStart','evUntil'].includes(e.target
 document.addEventListener('submit',e=>{
   e.preventDefault();const f=e.target;
   if(f.id==='loginForm'){login(f.email.value);return}
+  if(f.id==='otpForm'){if(f.code.value.trim())verifyCode(f.code.value);return}
   if(f.id==='modalForm'&&modalSubmit){const err=modalSubmit(f);const box=document.getElementById('modalErr');
     if(err){box.textContent=err;box.hidden=false;return}closeModal();save();render()}
 });
 // horloge du live
 setInterval(()=>{if(me&&visibleEvents().some(e=>evStatus(e)==='live')&&!document.getElementById('modal').innerHTML)render()},30000);
-render();
+boot();
 </script>
 
 </body>
