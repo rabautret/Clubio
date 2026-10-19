@@ -357,6 +357,10 @@ main{padding-block:22px 120px}
 .clean .evi-s+div>div:first-child{font-style:normal!important;text-transform:none!important;font-weight:700!important}
 .clean .evi-s{background:color-mix(in srgb,var(--tc) 14%,transparent);color:var(--tc)}
 .login .crest svg{width:34px;height:34px}
+.lvl-opt{flex:1;position:relative;display:flex;justify-content:center;padding:8px 10px;border-radius:10px;font-weight:700;cursor:pointer;color:var(--muted)}
+.lvl-opt input{position:absolute;opacity:0;pointer-events:none}
+.lvl-opt:has(input:checked){background:var(--accent);color:var(--accent-ink)}
+.lvl-opt:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .theme-pick{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .theme-opt{border:1.5px solid var(--line);border-radius:16px;background:var(--surface);padding:10px;display:flex;flex-direction:column;gap:8px;text-align:left;font-weight:700}
 .theme-opt[aria-pressed="true"]{border:2px solid var(--accent);background:var(--accent-soft)}
@@ -409,7 +413,7 @@ function fromDb(r){
   const c=r.club[0];
   if(c){st.club={name:c.name,short:c.short,sport:c.sport,sportName:c.sport_name||''};st.titles=c.titles||[]}
   st.users=r.members.map(m=>({id:m.id,email:m.email,name:m.name,role:m.role}));
-  st.champs=r.championships.map(x=>({id:x.id,name:x.name,season:x.season||''}));
+  st.champs=r.championships.map(x=>({id:x.id,name:x.name,season:x.season||'',level:x.level||'jeunes'}));
   st.teams=r.teams.map(t=>({id:t.id,name:t.name,category:t.category||'',coachIds:t.coach_ids||[],champIds:t.champ_ids||[]}));
   st.players=r.players.map(p=>({id:p.id,first:p.first_name,last:p.last_name,birth:p.birth||'',teamId:p.team_id,parentEmails:[],phones:{}}));
   const byId=Object.fromEntries(st.players.map(p=>[p.id,p]));
@@ -429,7 +433,7 @@ function toRows(){
   return {
     club:[{id:1,name:S.club.name,short:S.club.short,sport:S.club.sport,sport_name:S.club.sportName||null,titles:S.titles}],
     members:S.users.map(u=>({id:u.id,email:low(u.email),name:u.name,role:u.role})),
-    championships:S.champs.map(c=>({id:c.id,name:c.name,season:c.season||null})),
+    championships:S.champs.map(c=>({id:c.id,name:c.name,season:c.season||null,level:c.level||'jeunes'})),
     teams:S.teams.map(t=>({id:t.id,name:t.name,category:t.category||null,coach_ids:t.coachIds,champ_ids:t.champIds})),
     players:S.players.map(p=>({id:p.id,first_name:p.first,last_name:p.last,birth:p.birth||null,team_id:p.teamId||null})),
     player_parents:S.players.flatMap(p=>p.parentEmails.map((m,i)=>({player_id:p.id,email:low(m),phone:(p.phones||{})[low(m)]||'',state:(S.validations[low(m)]||{})[p.id]||'pending',position:i}))),
@@ -873,11 +877,16 @@ function playersSec(list,adminMode,teamId){
       ${adminMode?`<button class="btn small danger" data-a="player-del" data-id="${p.id}" data-confirm>Supprimer</button>`:`<button class="btn small danger" data-a="player-remove" data-id="${p.id}" data-confirm>Retirer</button>`}</div>
   </div>`).join('')}</div>`:'<div class="empty">Aucun joueur.</div>'}</div>`;
 }
+const LEVELS={jeunes:{label:'Jeunes',color:'#12B5A0'},adultes:{label:'Adultes',color:'#7B5CFF'}};
+const lvlChip=c=>{const l=LEVELS[c.level]||LEVELS.jeunes;return `<span class="chip team" style="--tc:${l.color}">${l.label}</span>`};
 function champsSec(){
+  const row=c=>{const ts=S.teams.filter(t=>t.champIds.includes(c.id));return `<div class="item" style="flex-wrap:wrap">
+    <div class="grow"><div class="name">${esc(c.name)} ${lvlChip(c)}</div><div class="meta">Saison ${esc(c.season)} · ${ts.length?ts.map(t=>esc(t.name)).join(', '):'aucune équipe engagée'}</div></div>
+    <div class="row"><button class="btn small" data-a="champ-edit" data-id="${c.id}">Modifier</button><button class="btn small danger" data-a="champ-del" data-id="${c.id}" data-confirm>Supprimer</button></div></div>`};
+  const groups=Object.entries(LEVELS).map(([k,l])=>[l,S.champs.filter(c=>(c.level||'jeunes')===k)]).filter(([,cs])=>cs.length);
   return `<div class="section"><div class="spread"><h3 style="font-size:20px">Championnats</h3><button class="btn primary small" data-a="champ-new">+ Championnat</button></div>
-  ${S.champs.length?`<div class="list">${S.champs.map(c=>{const ts=S.teams.filter(t=>t.champIds.includes(c.id));return `<div class="item" style="flex-wrap:wrap">
-    <div class="grow"><div class="name">${esc(c.name)}</div><div class="meta">Saison ${esc(c.season)} · ${ts.length?ts.map(t=>esc(t.name)).join(', '):'aucune équipe engagée'}</div></div>
-    <div class="row"><button class="btn small" data-a="champ-edit" data-id="${c.id}">Modifier</button><button class="btn small danger" data-a="champ-del" data-id="${c.id}" data-confirm>Supprimer</button></div></div>`}).join('')}</div>`:'<div class="empty">Aucun championnat.</div>'}</div>`;
+  ${groups.length?groups.map(([l,cs])=>`<div class="section"><div class="label" style="color:${l.color}">${l.label} · <span class="num">${cs.length}</span></div><div class="list">${cs.map(row).join('')}</div></div>`).join('')
+    :emptyBox(I.trophy,'Aucun championnat. Créez-en un et choisissez s\'il concerne les jeunes ou les adultes.')}</div>`;
 }
 function titlesSec(){
   return `<div class="section"><div class="spread"><h3 style="font-size:20px">Titres d'événements</h3><button class="btn primary small" data-a="title-new">+ Titre</button></div>
@@ -1092,7 +1101,7 @@ function act(a,d,el){
         <div class="grid2"><label class="field"><span>Nom</span><input class="input" id="tmName" name="name" required value="${esc(t?.name||'')}" placeholder="U15"></label>
         <label class="field"><span>Catégorie</span><input class="input" id="tmCat" name="cat" value="${esc(t?.category||'')}" placeholder="Moins de 15 ans"></label></div>
         <div class="field"><span>Coachs</span>${checks('coach',S.users.filter(u=>u.role==='coach'||u.role==='admin').map(u=>[u.id,u.name+(u.role==='admin'?' (admin)':'')]),t?.coachIds||[])}</div>
-        <div class="field"><span>Championnats</span>${checks('champ',S.champs.map(c=>[c.id,c.name]),t?.champIds||[])}</div>`,t?'Enregistrer':"Créer l'équipe",f=>{
+        <div class="field"><span>Championnats</span>${checks('champ',S.champs.map(c=>[c.id,`${c.name} · ${(LEVELS[c.level]||LEVELS.jeunes).label}`]),t?.champIds||[])}</div>`,t?'Enregistrer':"Créer l'équipe",f=>{
           const fd=new FormData(f),name=fd.get('name').trim();if(!name)return 'Indiquez un nom.';
           const data={name,category:fd.get('cat').trim(),coachIds:fd.getAll('coach'),champIds:fd.getAll('champ')};
           if(t)Object.assign(t,data);else S.teams.push({id:uid(),...data});toast(t?'Équipe mise à jour':'Équipe créée')});break}
@@ -1107,10 +1116,11 @@ function act(a,d,el){
     case 'champ-new':case 'champ-edit':{const c=a==='champ-edit'?champ(d.id):null;
       openModal(c?'Modifier le championnat':'Nouveau championnat',`
         <label class="field"><span>Nom</span><input class="input" id="chName" name="name" required value="${esc(c?.name||'')}" placeholder="Championnat District U15"></label>
+        <div class="field"><span>Catégorie</span><div class="seg" role="radiogroup">${Object.entries(LEVELS).map(([k,l])=>`<label class="lvl-opt"><input type="radio" name="level" value="${k}" ${(c?.level||'jeunes')===k?'checked':''}><span>${l.label}</span></label>`).join('')}</div></div>
         <label class="field"><span>Saison</span><input class="input" id="chSeason" name="season" value="${esc(c?.season||'2026-2027')}"></label>
         <div class="field"><span>Équipes engagées</span>${checks('team',S.teams.map(t=>[t.id,t.name]),c?S.teams.filter(t=>t.champIds.includes(c.id)).map(t=>t.id):[])}</div>`,c?'Enregistrer':'Créer le championnat',f=>{
           const fd=new FormData(f),name=fd.get('name').trim();if(!name)return 'Indiquez un nom.';
-          let cc=c;if(cc){cc.name=name;cc.season=fd.get('season').trim()}else{cc={id:uid(),name,season:fd.get('season').trim()};S.champs.push(cc)}
+          const level=fd.get('level')||'jeunes';let cc=c;if(cc){cc.name=name;cc.season=fd.get('season').trim();cc.level=level}else{cc={id:uid(),name,season:fd.get('season').trim(),level};S.champs.push(cc)}
           const sel=fd.getAll('team');S.teams.forEach(t=>{const has=t.champIds.includes(cc.id);if(sel.includes(t.id)&&!has)t.champIds.push(cc.id);if(!sel.includes(t.id)&&has)t.champIds=t.champIds.filter(x=>x!==cc.id)});
           toast(c?'Championnat mis à jour':'Championnat créé')});break}
     case 'champ-del':S.champs=S.champs.filter(c=>c.id!==d.id);S.teams.forEach(t=>t.champIds=t.champIds.filter(x=>x!==d.id));save();render();toast('Championnat supprimé');break;
