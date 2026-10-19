@@ -381,76 +381,21 @@ main{padding-block:22px 120px}
 /* =====================================================================
    CONFIGURATION SUPABASE — à remplir (Supabase > Project Settings > API)
    ===================================================================== */
-const SUPABASE_URL='https://tgsridrqrygxxzoynupc.supabase.co';
-const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRnc3JpZHJxcnlneHh6b3ludXBjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MDg2MTYsImV4cCI6MjEwNzk4NDYxNn0.68OuJLIqHR90i64DNctXxmtge1lbjN81iyGA5UPaXN0';
+const SUPABASE_URL='https://VOTRE-PROJET.supabase.co';
+const SUPABASE_ANON_KEY='VOTRE_CLE_ANON_PUBLIC';
 /* ===================================================================== */
 const CONFIGURED=!/VOTRE/.test(SUPABASE_URL+SUPABASE_ANON_KEY);
 const sb=CONFIGURED&&window.supabase?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
 
 /* ---------- Stockage ---------- */
-const KEY='vestiaire_club_v2', SKEY='vestiaire_club_session';
-const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
 const uid=()=>crypto.randomUUID();
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const low=s=>String(s||'').trim().toLowerCase();
 
-function at(dayOffset,h,m){const d=new Date();d.setDate(d.getDate()+dayOffset);d.setHours(h,m,0,0);return d.toISOString()}
-function nextDow(dow,h,m){const d=new Date();let diff=(dow-d.getDay()+7)%7;if(diff===0)diff=7;return at(diff,h,m)}
-function lastDow(dow,h,m){const d=new Date();let diff=(d.getDay()-dow+7)%7;if(diff===0)diff=7;return at(-diff,h,m)}
-
 const DEFAULT_TITLES=['Entraînement','Match de championnat','Match de coupe','Match amical','Tournoi','Stage','Réunion parents'];
-function seed(){
-  const u=[{id:'u1',email:'admin@club.fr',name:'Sophie Martin',role:'admin'},
-           {id:'u2',email:'coach.u11@club.fr',name:'Karim Benali',role:'coach'},
-           {id:'u3',email:'coach.u13@club.fr',name:'Julie Moreau',role:'coach'}];
-  const champs=[{id:'c1',name:'Championnat District U11 – Poule B',season:'2026-2027'},
-                {id:'c2',name:'Championnat Départemental U13 – D2',season:'2026-2027'},
-                {id:'c3',name:'Coupe du District U13',season:'2026-2027'}];
-  const teams=[{id:'t1',name:'U11',category:'Moins de 11 ans',coachIds:['u2'],champIds:['c1']},
-               {id:'t2',name:'U13',category:'Moins de 13 ans',coachIds:['u3'],champIds:['c2','c3']}];
-  const P=(id,first,last,birth,parentEmail,teamId,phones={})=>({id,first,last,birth,parentEmails:[].concat(parentEmail),teamId,phones});
-  const players=[
-    P('p1','Léo','Durand','2016-03-12',['famille.durand@mail.fr','papa.durand@mail.fr'],'t1',{'famille.durand@mail.fr':'06 12 34 56 78','papa.durand@mail.fr':'07 98 76 54 32'}),
-    P('p2','Inès','Petit','2016-07-02','petit.ines@mail.fr','t1'),
-    P('p3','Noah','Lefèvre','2016-01-25','lefevre.parents@mail.fr','t1'),
-    P('p4','Lina','Garcia','2016-11-08','garcia.maison@mail.fr','t1'),
-    P('p5','Adam','Roux','2016-05-19','roux.famille@mail.fr','t1'),
-    P('p6','Jade','Fontaine','2016-09-30','jade.fontaine.parents@mail.fr','t1'),
-    P('p7','Emma','Durand','2014-04-03','famille.durand@mail.fr','t2'),
-    P('p8','Hugo','Bernard','2014-02-14','bernard.h@mail.fr','t2'),
-    P('p9','Chloé','Lambert','2014-08-21','lambert.famille@mail.fr','t2'),
-    P('p10','Nathan','Girard','2014-12-01','girard.n@mail.fr','t2'),
-    P('p11','Manon','Faure','2014-06-11','faure.parents@mail.fr','t2'),
-    P('p12','Tom','Mercier','2014-10-17','mercier.t@mail.fr','t2'),
-    P('p13','Sacha','Blanc','2015-03-29','blanc.s@mail.fr',null)];
-  const t1=['p1','p2','p3','p4','p5','p6'], t2=['p7','p8','p9','p10','p11','p12'];
-  const liveStart=new Date(Date.now()-27*60000).toISOString();
-  const events=[
-    {id:'e1',teamId:'t1',title:'Match de championnat',subtitle:'contre FC Rives – Journée 4',opponent:'FC Rives',start:liveStart,askPresence:true,convoked:t1,
-     responses:{p1:'present',p2:'present',p3:'present',p4:'present',p5:'absent',p6:'present'},live:{status:'live',us:2,them:1,startedAt:liveStart}},
-    {id:'e2',teamId:'t1',title:'Entraînement',subtitle:'Stade municipal – terrain 2',opponent:'',start:nextDow(3,17,30),askPresence:true,convoked:t1,
-     responses:{p2:'present',p3:'absent',p4:'present'},live:{status:'none',us:0,them:0}},
-    {id:'e3',teamId:'t2',title:'Match de coupe',subtitle:'contre AS Vallon – 1er tour',opponent:'AS Vallon',start:nextDow(6,14,0),askPresence:true,convoked:['p7','p8','p9','p10','p11'],
-     responses:{p8:'present',p9:'present',p11:'absent'},live:{status:'none',us:0,them:0}},
-    {id:'e6',teamId:null,createdBy:'u2',title:'Stage',subtitle:'Stage de la Toussaint – toutes catégories',opponent:'',start:nextDow(1,9,30),askPresence:true,convoked:[...t1,...t2],
-     responses:{p1:'present',p7:'present',p9:'absent'},live:{status:'none',us:0,them:0}},
-    {id:'e4',teamId:'t2',title:'Entraînement',subtitle:'Gymnase Jean-Moulin',opponent:'',start:nextDow(2,18,0),askPresence:false,convoked:t2,responses:{},live:{status:'none',us:0,them:0}},
-    {id:'e5',teamId:'t1',title:'Match amical',subtitle:'contre ES Colline',opponent:'ES Colline',start:lastDow(6,10,30),askPresence:true,convoked:t1,
-     responses:{p1:'present',p2:'present',p3:'absent',p4:'present',p5:'present',p6:'present'},live:{status:'done',us:3,them:3,startedAt:lastDow(6,10,30)}}];
-  return {club:{name:'Olympique des Tilleuls',sport:'football',short:'OT'},titles:[...DEFAULT_TITLES],users:u,champs,teams,players,events,validations:{}};
-}
 
 const emptyState=()=>({club:{name:'Espace club',short:'',sport:'football',sportName:''},titles:[...DEFAULT_TITLES],users:[],champs:[],teams:[],players:[],events:[],validations:{}});
 let S=emptyState();
-function migrate(s){
-  s.players.forEach(p=>{if(!p.parentEmails){p.parentEmails=p.parentEmail?[p.parentEmail]:[];delete p.parentEmail}if(!p.phones){p.phones={};if(p.phone&&p.parentEmails[0])p.phones[low(p.parentEmails[0])]=p.phone}delete p.phone});
-  Object.keys(s.validations||{}).forEach(k=>{const v=s.validations[k];if(Array.isArray(v)){const o={};v.forEach(id=>o[id]='ok');s.validations[k]=o}});
-  s.validations=s.validations||{};if(!Array.isArray(s.titles))s.titles=[...DEFAULT_TITLES];
-  const keys={football:'football',foot:'football','basket-ball':'basket',basket:'basket',basketball:'basket','tennis de table':'pingpong','ping pong':'pingpong','ping-pong':'pingpong',handball:'hand',rugby:'rugby','volley-ball':'volley',volley:'volley',volleyball:'volley',tennis:'tennis',badminton:'badminton'};
-  const ks=['football','basket','pingpong','hand','rugby','volley','tennis','badminton','autre'];
-  if(!ks.includes(s.club.sport)){const k=keys[String(s.club.sport||'').trim().toLowerCase()];if(k)s.club.sport=k;else{s.club.sportName=s.club.sport||'';s.club.sport='autre'}}
-  return s;
-}
 let me=null;
 const ui={tab:'cal',clubSec:'teams',calMode:'up',teamFilter:'all',sheet:null,loginErr:'',loginStep:'email',loginEmail:'',busy:false,booting:true};
 
@@ -1017,7 +962,7 @@ function eventForm(e){
       <input class="input" id="evTitle" name="title" required value="${esc(e?.title||'')}" placeholder="Choisissez un titre ci-dessus ou saisissez le vôtre" aria-label="Titre">
       ${isAdmin()?`<label class="toggle" style="font-weight:500;font-size:14px"><input type="checkbox" id="evSaveTitle" name="saveTitle"> Ajouter ce titre à la liste des titres prédéfinis</label>`:''}
     </div>
-    <label class="field"><span>Sous-titre</span><input class="input" id="evSub" name="subtitle" value="${esc(e?.subtitle||'')}" placeholder="contre FC Rives – Journée 5"></label>
+    <label class="field"><span>Sous-titre</span><input class="input" id="evSub" name="subtitle" value="${esc(e?.subtitle||'')}" placeholder="contre l’adversaire – Journée 5"></label>
     <div class="grid2"><label class="field"><span>Date et heure de début</span><input class="input" id="evStart" type="datetime-local" name="start" required value="${toLocalInput(e?e.start:d)}"></label>
     <label class="field"><span>Adversaire (pour le live)</span><input class="input" id="evOpp" name="opponent" value="${esc(e?.opponent||'')}" placeholder="Facultatif"></label></div>
     ${!e?`<div class="grid2"><label class="field"><span>Répétition</span><select class="input" id="evRepeat" name="repeat">
