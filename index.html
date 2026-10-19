@@ -414,7 +414,7 @@ function fromDb(r){
   if(c){st.club={name:c.name,short:c.short,sport:c.sport,sportName:c.sport_name||''};st.titles=c.titles||[]}
   st.users=r.members.map(m=>({id:m.id,email:m.email,name:m.name,role:m.role}));
   st.champs=r.championships.map(x=>({id:x.id,name:x.name,season:x.season||'',level:x.level||'jeunes'}));
-  st.teams=r.teams.map(t=>({id:t.id,name:t.name,category:t.category||'',coachIds:t.coach_ids||[],champIds:t.champ_ids||[]}));
+  st.teams=r.teams.map(t=>({id:t.id,name:t.name,category:t.category||'',level:t.level||'jeunes',coachIds:t.coach_ids||[],champIds:t.champ_ids||[]}));
   st.players=r.players.map(p=>({id:p.id,first:p.first_name,last:p.last_name,birth:p.birth||'',teamId:p.team_id,parentEmails:[],phones:{}}));
   const byId=Object.fromEntries(st.players.map(p=>[p.id,p]));
   [...r.player_parents].sort((a,b)=>a.position-b.position).forEach(pp=>{
@@ -434,7 +434,7 @@ function toRows(){
     club:[{id:1,name:S.club.name,short:S.club.short,sport:S.club.sport,sport_name:S.club.sportName||null,titles:S.titles}],
     members:S.users.map(u=>({id:u.id,email:low(u.email),name:u.name,role:u.role})),
     championships:S.champs.map(c=>({id:c.id,name:c.name,season:c.season||null,level:c.level||'jeunes'})),
-    teams:S.teams.map(t=>({id:t.id,name:t.name,category:t.category||null,coach_ids:t.coachIds,champ_ids:t.champIds})),
+    teams:S.teams.map(t=>({id:t.id,name:t.name,category:t.category||null,level:t.level||'jeunes',coach_ids:t.coachIds,champ_ids:t.champIds})),
     players:S.players.map(p=>({id:p.id,first_name:p.first,last_name:p.last,birth:p.birth||null,team_id:p.teamId||null})),
     player_parents:S.players.flatMap(p=>p.parentEmails.map((m,i)=>({player_id:p.id,email:low(m),phone:(p.phones||{})[low(m)]||'',state:(S.validations[low(m)]||{})[p.id]||'pending',position:i}))),
     events:S.events.map(e=>({id:e.id,team_id:e.teamId||null,created_by:e.createdBy||null,title:e.title,subtitle:e.subtitle||null,opponent:e.opponent||null,
@@ -491,7 +491,7 @@ function identify(){
   const email=low(me.email);
   const u=S.users.find(x=>low(x.email)===email);
   if(u)me={role:u.role,id:u.id,email,name:u.name};
-  else if(S.players.some(p=>hasParent(p,email)))me={role:'parent',email,name:'Parent'};
+  else if(S.players.some(p=>hasParent(p,email))){const mine=S.players.filter(p=>hasParent(p,email)&&isSelf(p));me={role:'parent',email,name:mine.length?fullName(mine[0]):'Parent'}}
   else me={role:'unknown',email,name:''};
 }
 async function enter(email){
@@ -532,6 +532,8 @@ const linkedKids=()=>S.players.filter(p=>hasParent(p,me.email));
 const pendingKids=()=>linkedKids().filter(p=>!linkState(p,me.email));
 const children=()=>linkedKids().filter(p=>linkState(p,me.email)==='ok');
 const isStaff=()=>isAdmin()||isCoach();
+const isSelf=p=>team(p&&p.teamId)?.level==='adultes';          // joueur adulte : l'e-mail est le sien
+const famMode=list=>{const a=list.filter(isSelf).length;return a&&a===list.length?'self':a?'mixed':'kids'};
 const phoneOf=(p,m)=>(p.phones||{})[low(m)]||'';
 function myTeamIds(){
   if(isAdmin())return S.teams.map(t=>t.id);
@@ -588,10 +590,10 @@ function render(){
   if(isParent()&&pendingKids().length){app.innerHTML=validateView();renderSheet();return}
   const tabs=isAdmin()?[['cal','Calendrier',I.cal],['live','Live',I.live],['club','Club',I.club],['me','Compte',I.me]]
            :isCoach()?[['cal','Calendrier',I.cal],['live','Live',I.live],['team','Équipe',I.team],['me','Compte',I.me]]
-           :[['cal','Calendrier',I.cal],['live','Live',I.live],['kids','Enfant',I.child],['me','Compte',I.me]];
+           :[['cal','Calendrier',I.cal],['live','Live',I.live],['kids',{self:'Profil',mixed:'Famille',kids:'Enfant'}[famMode(children())],famMode(children())==='self'?I.me:I.child],['me','Compte',I.me]];
   if(!tabs.some(t=>t[0]===ui.tab))ui.tab='cal';
   const hasLive=visibleEvents().some(e=>evStatus(e)==='live');
-  const roleLbl={admin:'Admin',coach:'Coach',parent:'Parent'}[me.role];
+  const roleLbl={admin:'Admin',coach:'Coach',parent:famMode(linkedKids())==='self'?'Joueur':'Parent'}[me.role];
   let body='';
   if(ui.tab==='cal')body=calView();
   else if(ui.tab==='live')body=liveView();
@@ -687,18 +689,18 @@ function validateView(){
   const kids=pendingKids();
   return `<header class="top"><div class="wrap"><div class="crest">${esc(S.club.short)}</div><div><h1>Bienvenue</h1><div class="sub">${esc(me.email)}</div></div></div></header>
   <main><div class="wrap stack">
-    <div><h2 style="font-size:26px">${kids.length>1?'Est-ce bien vos enfants ?':'Est-ce bien votre enfant ?'}</h2><p class="muted" style="margin:6px 0 0">Le club a associé ${kids.length>1?`${kids.length} enfants`:'cet enfant'} à votre adresse e-mail. Confirmez pour accéder au calendrier et aux convocations.</p></div>
+    <div><h2 style="font-size:26px">${{self:'Est-ce bien vous ?',mixed:'Vérifiez vos fiches',kids:kids.length>1?'Est-ce bien vos enfants ?':'Est-ce bien votre enfant ?'}[famMode(kids)]}</h2><p class="muted" style="margin:6px 0 0">Le club a associé ${famMode(kids)==='self'?'cette fiche joueur':kids.length>1?`${kids.length} fiches`:'cet enfant'} à votre adresse e-mail. Confirmez pour accéder au calendrier et aux convocations.</p></div>
     ${kids.map(k=>{const t=team(k.teamId);const others=k.parentEmails.filter(e=>low(e)!==low(me.email));return `<div class="card section">
       <div class="spread"><div class="row">${av(fullName(k))}<div><div style="font-family:var(--f-display);font-weight:700;font-size:22px">${esc(fullName(k))}</div><div class="muted" style="font-size:14px">${t?esc(t.name)+' · '+esc(t.category||''):'Pas encore d\'équipe'}</div></div></div></div>
-      ${others.length?`<div class="muted" style="font-size:13px">Un autre parent est aussi rattaché à cette fiche.</div>`:''}
+      ${others.length&&!isSelf(k)?`<div class="muted" style="font-size:13px">Un autre parent est aussi rattaché à cette fiche.</div>`:''}
       <div class="grid2">
         <label class="field"><span>Date de naissance</span><input class="input" id="v-birth-${k.id}" type="date" value="${esc(k.birth)}"></label>
         <label class="field"><span>Votre téléphone</span><input class="input" id="v-phone-${k.id}" type="tel" value="${esc(phoneOf(k,me.email))}" placeholder="06 00 00 00 00"></label>
       </div>
       <div class="muted" style="font-size:13px">Le nom et le prénom sont gérés par le club. Votre téléphone n'est visible que par le club et les coachs.</div>
       <div class="grid2">
-        <button class="btn primary" data-a="kid-ok" data-id="${k.id}">Oui, c'est mon enfant</button>
-        <button class="btn danger" data-a="kid-no" data-id="${k.id}" data-confirm>Ce n'est pas mon enfant</button>
+        <button class="btn primary" data-a="kid-ok" data-id="${k.id}">${isSelf(k)?'Oui, c\'est moi':'Oui, c\'est mon enfant'}</button>
+        <button class="btn danger" data-a="kid-no" data-id="${k.id}" data-confirm>${isSelf(k)?'Ce n\'est pas moi':'Ce n\'est pas mon enfant'}</button>
       </div>
     </div>`}).join('')}
     <button class="btn block" type="button" data-a="logout">Se déconnecter</button>
@@ -772,10 +774,10 @@ function evCard(e){
       ${e.askPresence&&!isParent()?presenceBar(e):''}
       ${e.askPresence&&kids.length&&st==='up'?kids.map(k=>respRow(e,k)).join(''):''}
       ${e.askPresence&&kids.length&&st!=='up'?kids.map(k=>`<div class="resp"><span class="who">${esc(k.first)}</span>${statusPill(e.responses[k.id])}</div>`).join(''):''}
-      ${isParent()&&!kids.length&&e.askPresence?'<span class="muted" style="font-size:13px">Votre enfant n\'est pas convoqué.</span>':''}
+      ${isParent()&&!kids.length&&e.askPresence?`<span class="muted" style="font-size:13px">${famMode(children())==='self'?'Vous n\'êtes pas convoqué.':'Votre enfant n\'est pas convoqué.'}</span>`:''}
     </div></div>`;
 }
-function respRow(e,k){const r=e.responses[k.id];return `<div class="resp"><span class="who">${esc(k.first)}</span>
+function respRow(e,k){const r=e.responses[k.id];return `<div class="resp"><span class="who">${isSelf(k)?'Ma réponse':esc(k.first)}</span>
   <button class="rbtn present" data-a="respond" data-ev="${e.id}" data-pl="${k.id}" data-v="present" aria-pressed="${r==='present'}">Présent</button>
   <button class="rbtn absent" data-a="respond" data-ev="${e.id}" data-pl="${k.id}" data-v="absent" aria-pressed="${r==='absent'}">Absent</button></div>`}
 const statusPill=r=>r==='present'?'<span class="status present">Présent</span>':r==='absent'?'<span class="status absent">Absent</span>':'<span class="status none">Pas répondu</span>';
@@ -789,7 +791,7 @@ function renderSheet(){
   const conv=e.convoked.map(player).filter(Boolean).sort((a,b)=>a.last.localeCompare(b.last));
   const grp={present:[],absent:[],none:[]};conv.forEach(p=>grp[e.responses[p.id]||'none'].push(p));
   const myKids=isParent()?children().map(c=>c.id):[];
-  const plRow=p=>`<div class="item">${av(fullName(p))}<div class="grow"><div class="name">${esc(fullName(p))}${myKids.includes(p.id)?' <span class="chip team">Votre enfant</span>':''}</div>${isStaff()?p.parentEmails.filter(m=>phoneOf(p,m)).map(m=>`<div class="meta num">${esc(phoneOf(p,m))} · ${esc(m)}</div>`).join(''):''}</div>
+  const plRow=p=>`<div class="item">${av(fullName(p))}<div class="grow"><div class="name">${esc(fullName(p))}${myKids.includes(p.id)?` <span class="chip team">${isSelf(p)?'Vous':'Votre enfant'}</span>`:''}</div>${isStaff()?p.parentEmails.filter(m=>phoneOf(p,m)).map(m=>`<div class="meta num">${esc(phoneOf(p,m))} · ${esc(m)}</div>`).join(''):''}</div>
     ${(manage||(myKids.includes(p.id)&&st==='up'))?`<button class="rbtn present" data-a="respond" data-ev="${e.id}" data-pl="${p.id}" data-v="present" aria-pressed="${e.responses[p.id]==='present'}" aria-label="Présent">P</button><button class="rbtn absent" data-a="respond" data-ev="${e.id}" data-pl="${p.id}" data-v="absent" aria-pressed="${e.responses[p.id]==='absent'}" aria-label="Absent">A</button>`:statusPill(e.responses[p.id])}</div>`;
   const grpBlock=(k,lbl,color)=>`<div class="section"><div class="label" style="color:${color}">${lbl} · <span class="num">${grp[k].length}</span></div>${grp[k].length?`<div class="list">${grp[k].map(plRow).join('')}</div>`:'<div class="muted" style="font-size:14px">Personne</div>'}</div>`;
   root.innerHTML=`<div class="overlay" data-a="close-sheet"><div class="panel" role="dialog" aria-modal="true" aria-label="${esc(e.title)}">
@@ -855,13 +857,16 @@ function clubView(){
     ${body}</div>`;
 }
 function teamsSec(){
-  return `<div class="section"><div class="spread"><h3 style="font-size:20px">Équipes</h3><button class="btn primary small" data-a="team-new">+ Équipe</button></div>
-  ${S.teams.length?S.teams.map(t=>`<div class="card section">
-    <div class="spread"><div class="row"><span class="evi-s" style="--tc:${teamColor(t.id)}">${I.team}</span><div><div style="font-family:var(--f-display);font-weight:800;font-style:italic;font-size:24px;text-transform:uppercase">${esc(t.name)}</div><div class="muted" style="font-size:14px">${esc(t.category||'')} · <span class="num">${teamPlayers(t.id).length}</span> joueurs</div></div></div>
+  const card=t=>`<div class="card section">
+    <div class="spread"><div class="row"><span class="evi-s" style="--tc:${teamColor(t.id)}">${I.team}</span><div><div style="font-family:var(--f-display);font-weight:800;font-style:italic;font-size:24px;text-transform:uppercase">${esc(t.name)} ${lvlChip(t)}</div><div class="muted" style="font-size:14px">${esc(t.category||'')} · <span class="num">${teamPlayers(t.id).length}</span> joueurs</div></div></div>
       <div class="row"><button class="btn small" data-a="team-edit" data-id="${t.id}">Modifier</button><button class="btn small danger" data-a="team-del" data-id="${t.id}" data-confirm>Supprimer</button></div></div>
     <div class="row" style="gap:6px"><span class="label" style="margin-right:4px">Coachs</span>${t.coachIds.length?t.coachIds.map(id=>`<span class="chip">${esc(user(id)?.name)}</span>`).join(''):'<span class="muted" style="font-size:13px">Aucun</span>'}</div>
     <div class="row" style="gap:6px"><span class="label" style="margin-right:4px">Engagée en</span>${t.champIds.length?t.champIds.map(id=>`<span class="chip">${esc(champ(id)?.name)}</span>`).join(''):'<span class="muted" style="font-size:13px">Aucun championnat</span>'}</div>
-  </div>`).join(''):'<div class="empty">Aucune équipe. Créez-en une pour y placer vos joueurs.</div>'}</div>`;
+  </div>`;
+  const groups=Object.entries(LEVELS).map(([k,l])=>[l,S.teams.filter(t=>(t.level||'jeunes')===k)]).filter(([,ts])=>ts.length);
+  return `<div class="section"><div class="spread"><h3 style="font-size:20px">Équipes</h3><button class="btn primary small" data-a="team-new">+ Équipe</button></div>
+  ${groups.length?groups.map(([l,ts])=>`<div class="section"><div class="label" style="color:${l.color}">${l.label} · <span class="num">${ts.length}</span></div>${ts.map(card).join('')}</div>`).join('')
+    :emptyBox(I.team,'Aucune équipe. Créez-en une, jeunes ou adultes, pour y placer vos joueurs.')}</div>`;
 }
 function playersSec(list,adminMode,teamId){
   const opts=sel=>`<option value="">Sans équipe</option>`+S.teams.filter(t=>adminMode||canManage(t.id)).map(t=>`<option value="${t.id}" ${sel===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
@@ -879,6 +884,10 @@ function playersSec(list,adminMode,teamId){
 }
 const LEVELS={jeunes:{label:'Jeunes',color:'#12B5A0'},adultes:{label:'Adultes',color:'#7B5CFF'}};
 const lvlChip=c=>{const l=LEVELS[c.level]||LEVELS.jeunes;return `<span class="chip team" style="--tc:${l.color}">${l.label}</span>`};
+function teamChampChecks(level,sel){
+  const cs=S.champs.filter(c=>(c.level||'jeunes')===level);
+  return cs.length?checks('champ',cs.map(c=>[c.id,`${c.name}${c.season?' · '+c.season:''}`]),sel):`<div class="muted" style="font-size:14px">Aucun championnat ${LEVELS[level].label.toLowerCase()} pour l'instant. Créez-le dans l'onglet Compétitions.</div>`;
+}
 function champsSec(){
   const row=c=>{const ts=S.teams.filter(t=>t.champIds.includes(c.id));return `<div class="item" style="flex-wrap:wrap">
     <div class="grow"><div class="name">${esc(c.name)} ${lvlChip(c)}</div><div class="meta">Saison ${esc(c.season)} · ${ts.length?ts.map(t=>esc(t.name)).join(', '):'aucune équipe engagée'}</div></div>
@@ -916,7 +925,8 @@ function coachTeamView(){
 /* ---------- Enfant (parent) ---------- */
 function kidsView(){
   if(!children().length)return `<div class="stack">${pageTitle('Mon enfant',I.child,'#7B5CFF')}${emptyBox(I.child,"Aucun enfant n'est rattaché à votre adresse.<br>Si c'est une erreur, contactez le club.")}</div>`;
-  return `<div class="stack">${pageTitle(children().length>1?'Mes enfants':'Mon enfant',I.child,'#7B5CFF')}
+  const fm=famMode(children());
+  return `<div class="stack">${pageTitle(fm==='self'?'Mon profil':fm==='mixed'?'Ma famille':children().length>1?'Mes enfants':'Mon enfant',fm==='self'?I.me:I.child,'#7B5CFF')}
   ${children().map(k=>{const t=team(k.teamId);const coaches=t?t.coachIds.map(user).filter(Boolean):[];
     const next=S.events.filter(e=>(!e.teamId||e.teamId===k.teamId)&&e.convoked.includes(k.id)&&evStatus(e)==='up').sort((a,b)=>new Date(a.start)-new Date(b.start))[0];
     return `<div class="card section kid-card" style="--tc:${t?teamColor(t.id):'#7B5CFF'}">
@@ -1036,24 +1046,33 @@ const convChecks=(tid,sel)=>{
   return checks('conv',ps.map(p=>[p.id,`${fullName(p)} · ${team(p.teamId).name}`]),sel||ps.map(p=>p.id));
 };
 
-function playerForm(p,presetTeam){
+function playerFormMode(){
+  const sel=document.getElementById('plTeam');if(!sel)return;
+  const adult=team(sel.value)?.level==='adultes';
+  document.getElementById('lbMail').textContent=adult?'E-mail du joueur':'E-mail parent 1';
+  document.getElementById('lbPhone').textContent=adult?'Téléphone du joueur':'Téléphone parent 1';
+  document.getElementById('plMail').placeholder=adult?'joueur@mail.fr':'parent@mail.fr';
+  document.getElementById('parent2Row').hidden=adult;
+  document.getElementById('plHint').textContent=adult?'Équipe adultes : le joueur se connecte avec cette adresse et répond lui-même aux convocations. Son téléphone n\'est visible que par le club et les coachs.':'Les téléphones ne sont visibles que par le club et les coachs. Chaque parent peut modifier le sien.';
+}
+function playerForm(p,presetTeam){setTimeout(playerFormMode,0);
   const teams=S.teams.filter(t=>canManage(t.id));
   const tid=p?p.teamId:presetTeam;
   openModal(p?'Modifier le joueur':'Nouveau joueur',`
     <div class="grid2"><label class="field"><span>Prénom</span><input class="input" id="plFirst" name="first" required value="${esc(p?.first||'')}"></label>
     <label class="field"><span>Nom</span><input class="input" id="plLast" name="last" required value="${esc(p?.last||'')}"></label></div>
     <label class="field"><span>Date de naissance</span><input class="input" id="plBirth" type="date" name="birth" value="${esc(p?.birth||'')}"></label>
-    <div class="grid2"><label class="field"><span>E-mail parent 1</span><input class="input" id="plMail" type="email" name="mail" required value="${esc(p?.parentEmails[0]||'')}" placeholder="parent@mail.fr"></label>
-    <label class="field"><span>Téléphone parent 1</span><input class="input" id="plPhone" type="tel" name="phone" value="${esc(p?phoneOf(p,p.parentEmails[0]):'')}" placeholder="06 00 00 00 00"></label></div>
-    <div class="grid2"><label class="field"><span>E-mail parent 2 (facultatif)</span><input class="input" id="plMail2" type="email" name="mail2" value="${esc(p?.parentEmails[1]||'')}" placeholder="autre.parent@mail.fr"></label>
+    <div class="grid2"><label class="field"><span id="lbMail">E-mail parent 1</span><input class="input" id="plMail" type="email" name="mail" required value="${esc(p?.parentEmails[0]||'')}" placeholder="parent@mail.fr"></label>
+    <label class="field"><span id="lbPhone">Téléphone parent 1</span><input class="input" id="plPhone" type="tel" name="phone" value="${esc(p?phoneOf(p,p.parentEmails[0]):'')}" placeholder="06 00 00 00 00"></label></div>
+    <div class="grid2" id="parent2Row"><label class="field"><span>E-mail parent 2 (facultatif)</span><input class="input" id="plMail2" type="email" name="mail2" value="${esc(p?.parentEmails[1]||'')}" placeholder="autre.parent@mail.fr"></label>
     <label class="field"><span>Téléphone parent 2</span><input class="input" id="plPhone2" type="tel" name="phone2" value="${esc(p&&p.parentEmails[1]?phoneOf(p,p.parentEmails[1]):'')}" placeholder="06 00 00 00 00"></label></div>
-    <div class="muted" style="font-size:13px">Les téléphones ne sont visibles que par le club et les coachs. Chaque parent peut modifier le sien.</div>
+    <div class="muted" id="plHint" style="font-size:13px">Les téléphones ne sont visibles que par le club et les coachs. Chaque parent peut modifier le sien.</div>
     <label class="field"><span>Équipe</span><select class="input" id="plTeam" name="team">${isAdmin()?'<option value="">Sans équipe</option>':''}${teams.map(t=>`<option value="${t.id}" ${t.id===tid?'selected':''}>${esc(t.name)}</option>`).join('')}</select></label>
   `,p?'Enregistrer':'Ajouter le joueur',f=>{
-    const fd=new FormData(f),first=fd.get('first').trim(),last=fd.get('last').trim(),mail=low(fd.get('mail')),mail2=low(fd.get('mail2'));
+    const fd=new FormData(f),first=fd.get('first').trim(),last=fd.get('last').trim(),mail=low(fd.get('mail')),mail2=team(fd.get('team'))?.level==='adultes'?'':low(fd.get('mail2'));
     const re=/^[^@\s]+@[^@\s]+\.[^@\s]+$/;
     if(!first||!last)return 'Indiquez le prénom et le nom.';
-    if(!re.test(mail))return "L'e-mail du parent 1 n'est pas valide.";
+    if(!re.test(mail))return team(fd.get('team'))?.level==='adultes'?"L'e-mail du joueur n'est pas valide.":"L'e-mail du parent 1 n'est pas valide.";
     if(mail2&&!re.test(mail2))return "L'e-mail du parent 2 n'est pas valide.";
     if(mail2===mail)return 'Les deux e-mails parents sont identiques.';
     const phones={[mail]:fd.get('phone').trim()};if(mail2)phones[mail2]=fd.get('phone2').trim();
@@ -1099,11 +1118,12 @@ function act(a,d,el){
     case 'team-new':case 'team-edit':{const t=a==='team-edit'?team(d.id):null;
       openModal(t?"Modifier l'équipe":'Nouvelle équipe',`
         <div class="grid2"><label class="field"><span>Nom</span><input class="input" id="tmName" name="name" required value="${esc(t?.name||'')}" placeholder="U15"></label>
-        <label class="field"><span>Catégorie</span><input class="input" id="tmCat" name="cat" value="${esc(t?.category||'')}" placeholder="Moins de 15 ans"></label></div>
+        <label class="field"><span>Catégorie d'âge</span><input class="input" id="tmCat" name="cat" value="${esc(t?.category||'')}" placeholder="Moins de 15 ans, Seniors…"></label></div>
+        <div class="field"><span>Type d'équipe</span><div class="seg" role="radiogroup">${Object.entries(LEVELS).map(([k,l])=>`<label class="lvl-opt"><input type="radio" name="tlevel" value="${k}" ${(t?.level||'jeunes')===k?'checked':''}><span>${l.label}</span></label>`).join('')}</div></div>
         <div class="field"><span>Coachs</span>${checks('coach',S.users.filter(u=>u.role==='coach'||u.role==='admin').map(u=>[u.id,u.name+(u.role==='admin'?' (admin)':'')]),t?.coachIds||[])}</div>
-        <div class="field"><span>Championnats</span>${checks('champ',S.champs.map(c=>[c.id,`${c.name} · ${(LEVELS[c.level]||LEVELS.jeunes).label}`]),t?.champIds||[])}</div>`,t?'Enregistrer':"Créer l'équipe",f=>{
+        <div class="field"><span>Championnats</span><div id="tmChamps">${teamChampChecks(t?.level||'jeunes',t?.champIds||[])}</div></div>`,t?'Enregistrer':"Créer l'équipe",f=>{
           const fd=new FormData(f),name=fd.get('name').trim();if(!name)return 'Indiquez un nom.';
-          const data={name,category:fd.get('cat').trim(),coachIds:fd.getAll('coach'),champIds:fd.getAll('champ')};
+          const data={name,category:fd.get('cat').trim(),level:fd.get('tlevel')||'jeunes',coachIds:fd.getAll('coach'),champIds:fd.getAll('champ')};
           if(t)Object.assign(t,data);else S.teams.push({id:uid(),...data});toast(t?'Équipe mise à jour':'Équipe créée')});break}
     case 'team-del':S.teams=S.teams.filter(t=>t.id!==d.id);S.players.forEach(p=>{if(p.teamId===d.id)p.teamId=null});S.events=S.events.filter(e=>e.teamId!==d.id);save();render();toast('Équipe supprimée');break;
     case 'player-new':playerForm(null,d.team);break;
@@ -1136,13 +1156,13 @@ function act(a,d,el){
           else S.users.push({id:uid(),name,email:mail,role:fd.get('role')});toast(u?'Membre mis à jour':'Membre ajouté')});break}
     case 'user-del':S.users=S.users.filter(u=>u.id!==d.id);S.teams.forEach(t=>t.coachIds=t.coachIds.filter(x=>x!==d.id));save();render();toast('Membre supprimé');break;
     case 'child-edit':{const k=player(d.id);
-      openModal(`Modifier ${k.first}`,`<div class="card"><div class="label">Enfant</div><div style="font-weight:600">${esc(fullName(k))}</div><div class="muted" style="font-size:13px">Pour corriger le nom ou le prénom, contactez le club.</div></div>
+      openModal(isSelf(k)?'Modifier mon profil':`Modifier ${k.first}`,`<div class="card"><div class="label">${isSelf(k)?'Joueur':'Enfant'}</div><div style="font-weight:600">${esc(fullName(k))}</div><div class="muted" style="font-size:13px">Pour corriger le nom ou le prénom, contactez le club.</div></div>
         <label class="field"><span>Date de naissance</span><input class="input" id="ckBirth" type="date" name="birth" value="${esc(k.birth)}"></label>
         <label class="field"><span>Votre téléphone</span><input class="input" id="ckPhone" type="tel" name="phone" value="${esc(phoneOf(k,me.email))}" placeholder="06 00 00 00 00"></label>
-        <div class="muted" style="font-size:13px">Votre téléphone n'est visible que par le club et les coachs. L'autre parent renseigne le sien.</div>`,'Enregistrer',f=>{
+        <div class="muted" style="font-size:13px">Votre téléphone n'est visible que par le club et les coachs.${isSelf(k)?'':' L\'autre parent renseigne le sien.'}</div>`,'Enregistrer',f=>{
           const fd=new FormData(f);k.birth=fd.get('birth');setPhone(k,fd.get('phone'));parentCall('parent_update',{p_player:k.id,p_birth:k.birth||null,p_phone:fd.get('phone')||''});toast('Informations mises à jour')});break}
     case 'kid-ok':{const p=player(d.id);const b=document.getElementById('v-birth-'+p.id),ph=document.getElementById('v-phone-'+p.id);
-      if(b&&b.value)p.birth=b.value;if(ph)setPhone(p,ph.value);setLink(p.id,'ok');parentCall('parent_link',{p_player:p.id,p_state:'ok',p_birth:p.birth||null,p_phone:ph?ph.value:null});ui.tab='cal';render();toast(`${p.first} est rattaché(e) à votre compte`);break}
+      if(b&&b.value)p.birth=b.value;if(ph)setPhone(p,ph.value);setLink(p.id,'ok');parentCall('parent_link',{p_player:p.id,p_state:'ok',p_birth:p.birth||null,p_phone:ph?ph.value:null});ui.tab='cal';render();toast(isSelf(p)?'Profil confirmé':`${p.first} est rattaché(e) à votre compte`);break}
     case 'pick-title':{const inp=document.getElementById('evTitle');inp.value=d.v;document.querySelectorAll('.chip.pick').forEach(c=>c.setAttribute('aria-pressed',c===el));inp.focus();break}
     case 'title-new':case 'title-edit':{const i=a==='title-edit'?Number(d.i):-1;
       openModal(i<0?'Nouveau titre':'Renommer le titre',`<label class="field"><span>Titre</span><input class="input" id="ttName" name="name" required value="${esc(i<0?'':S.titles[i])}" placeholder="Plateau U9"></label>`,i<0?'Ajouter':'Enregistrer',f=>{
@@ -1175,6 +1195,8 @@ document.addEventListener('change',e=>{
   if(t.id==='teamFilter'){ui.teamFilter=t.value;render()}
   else if(t.dataset.a==='player-move'){const p=player(t.dataset.id);p.teamId=t.value||null;save();render();toast(`${p.first} → ${p.teamId?team(p.teamId).name:'sans équipe'}`)}
   else if(['evRepeat','evUntil','evStart'].includes(t.id)){updateRepeatHint()}
+  else if(t.id==='plTeam'){playerFormMode()}
+  else if(t.name==='tlevel'&&t.type==='radio'){const sel=[...document.querySelectorAll('#tmChamps input:checked')].map(i=>i.value);document.getElementById('tmChamps').innerHTML=teamChampChecks(t.value,sel)}
   else if(t.name==='sport'&&t.type==='radio'){document.getElementById('clOtherWrap').hidden=t.value!=='autre'}
   else if(t.id==='evTeam'){document.getElementById('convBox').innerHTML=convChecks(t.value,null);document.getElementById('evScopeHint').hidden=t.value!==CLUB}
 });
